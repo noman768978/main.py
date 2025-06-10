@@ -1,0 +1,244 @@
+import asyncio
+import os
+from typing import Dict, Any, AsyncGenerator, Optional
+from enum import Enum
+import google.generativeai as genai
+from pydantic import BaseModel
+import json
+
+# Configure Gemini API
+genai.configure(api_key="YOUR_GEMINI_API_KEY")  # Replace with your actual API key
+
+class ExecutionMethod(Enum):
+    RUN = "run"
+    RUN_SYNC = "run_sync"
+    STREAMING = "streaming"
+
+class ExecutionLevel(Enum):
+    AGENT_LEVEL = "agent_level"
+    RUN_LEVEL = "run_level"
+    GLOBAL_LEVEL = "global_level"
+
+class AgentConfig(BaseModel):
+    name: str
+    model_name: str = "gemini-pro"
+    temperature: float = 0.7
+    max_tokens: int = 1000
+
+class GeminiAgent:
+    def __init__(self, config: AgentConfig):
+        self.config = config
+        self.model = genai.GenerativeModel(config.model_name)
+        self.global_context = {}
+        
+    async def execute_query(self, query: str, method: ExecutionMethod, level: ExecutionLevel, context: Dict[str, Any] = None) -> Any:
+        """Execute query based on method and level"""
+        context = context or {}
+        
+        print(f"\n🤖 Agent: {self.config.name}")
+        print(f"📊 Level: {level.value}")
+        print(f"⚡ Method: {method.value}")
+        print(f"❓ Query: {query}")
+        print("-" * 50)
+        
+        # Prepare context based on level
+        execution_context = self._prepare_context(level, context)
+        
+        # Execute based on method
+        if method == ExecutionMethod.RUN:
+            return await self._run_async(query, execution_context)
+        elif method == ExecutionMethod.RUN_SYNC:
+            return self._run_sync(query, execution_context)
+        elif method == ExecutionMethod.STREAMING:
+            return await self._run_streaming(query, execution_context)
+    
+    def _prepare_context(self, level: ExecutionLevel, context: Dict[str, Any]) -> str:
+        """Prepare context based on execution level"""
+        base_prompt = f"Query: {context.get('query', '')}\n"
+        
+        if level == ExecutionLevel.AGENT_LEVEL:
+            return f"{base_prompt}Agent Context: {self.config.name} - Specialized agent response"
+        elif level == ExecutionLevel.RUN_LEVEL:
+            return f"{base_prompt}Run Context: Single execution context with parameters: {context}"
+        elif level == ExecutionLevel.GLOBAL_LEVEL:
+            return f"{base_prompt}Global Context: {self.global_context}\nCurrent Context: {context}"
+    
+    async def _run_async(self, query: str, context: str) -> str:
+        """Asynchronous execution"""
+        try:
+            full_prompt = f"{context}\n\nPlease respond to: {query}"
+            response = await asyncio.to_thread(
+                self.model.generate_content, 
+                full_prompt
+            )
+            result = response.text
+            print(f"✅ Async Result: {result[:100]}...")
+            return result
+        except Exception as e:
+            error_msg = f"❌ Async Error: {str(e)}"
+            print(error_msg)
+            return error_msg
+    
+    def _run_sync(self, query: str, context: str) -> str:
+        """Synchronous execution"""
+        try:
+            full_prompt = f"{context}\n\nPlease respond to: {query}"
+            response = self.model.generate_content(full_prompt)
+            result = response.text
+            print(f"✅ Sync Result: {result[:100]}...")
+            return result
+        except Exception as e:
+            error_msg = f"❌ Sync Error: {str(e)}"
+            print(error_msg)
+            return error_msg
+    
+    async def _run_streaming(self, query: str, context: str) -> AsyncGenerator[str, None]:
+        """Streaming execution"""
+        try:
+            full_prompt = f"{context}\n\nPlease respond to: {query}"
+            print("🌊 Streaming Response:")
+            
+            # Simulate streaming (Gemini API streaming implementation)
+            response = self.model.generate_content(full_prompt, stream=True)
+            
+            full_response = ""
+            for chunk in response:
+                if chunk.text:
+                    print(chunk.text, end="", flush=True)
+                    full_response += chunk.text
+                    yield chunk.text
+            
+            print(f"\n✅ Streaming Complete: {len(full_response)} characters")
+            
+        except Exception as e:
+            error_msg = f"❌ Streaming Error: {str(e)}"
+            print(error_msg)
+            yield error_msg
+    
+    def update_global_context(self, key: str, value: Any):
+        """Update global context"""
+        self.global_context[key] = value
+        print(f"🌍 Global context updated: {key} = {value}")
+
+class AgentSystem:
+    def __init__(self):
+        self.agents = {}
+        self.global_config = {
+            "system_name": "Gemini Agent System",
+            "version": "1.0.0"
+        }
+    
+    def create_agent(self, name: str, model_name: str = "gemini-pro") -> GeminiAgent:
+        """Create a new agent"""
+        config = AgentConfig(name=name, model_name=model_name)
+        agent = GeminiAgent(config)
+        self.agents[name] = agent
+        print(f"🎯 Agent '{name}' created successfully!")
+        return agent
+    
+    async def run_comprehensive_test(self):
+        """Run comprehensive test with all combinations"""
+        # Create agents
+        agent1 = self.create_agent("DataAnalyst", "gemini-pro")
+        agent2 = self.create_agent("CodeHelper", "gemini-pro")
+        
+        # Test queries
+        queries = [
+            "What is artificial intelligence?",
+            "Explain Python programming basics",
+            "How does machine learning work?"
+        ]
+        
+        # Test all combinations
+        for i, query in enumerate(queries):
+            agent = agent1 if i % 2 == 0 else agent2
+            
+            # Update global context
+            agent.update_global_context("session_id", f"session_{i+1}")
+            agent.update_global_context("user_preference", "detailed_explanation")
+            
+            print(f"\n{'='*60}")
+            print(f"🔄 TESTING QUERY {i+1}: {query}")
+            print(f"{'='*60}")
+            
+            # Test all level and method combinations
+            for level in ExecutionLevel:
+                for method in ExecutionMethod:
+                    try:
+                        context = {
+                            "query": query,
+                            "session": f"session_{i+1}",
+                            "timestamp": f"2024-{i+1:02d}-01"
+                        }
+                        
+                        if method == ExecutionMethod.STREAMING:
+                            print(f"\n🌊 Starting streaming for {level.value}...")
+                            async for chunk in agent.execute_query(query, method, level, context):
+                                pass  # Chunks are already printed in the method
+                        else:
+                            result = await agent.execute_query(query, method, level, context)
+                        
+                        # Small delay between executions
+                        await asyncio.sleep(1)
+                        
+                    except Exception as e:
+                        print(f"❌ Error in {level.value} - {method.value}: {str(e)}")
+                
+                print(f"\n{'-'*40}")
+        
+        print(f"\n🎉 Comprehensive testing completed!")
+        print(f"📊 Total agents: {len(self.agents)}")
+        print(f"🔢 Total combinations tested: {len(ExecutionLevel) * len(ExecutionMethod) * len(queries)}")
+
+# Demo function
+async def run_demo():
+    """Run the complete demo"""
+    print("🚀 Starting Gemini Agent System Demo")
+    print("="*60)
+    
+    # Create system
+    system = AgentSystem()
+    
+    # Run comprehensive test
+    await system.run_comprehensive_test()
+    
+    print("\n" + "="*60)
+    print("✨ Demo completed successfully!")
+    print("💡 You can now modify queries and test different scenarios")
+
+# Simple usage example
+async def simple_example():
+    """Simple usage example"""
+    print("\n🎯 Simple Example:")
+    print("-" * 30)
+    
+    # Create agent
+    config = AgentConfig(name="SimpleAgent")
+    agent = GeminiAgent(config)
+    
+    # Test query
+    query = "Explain what is Python in simple terms"
+    
+    # Test different methods
+    print("1. Testing RUN method:")
+    result1 = await agent.execute_query(query, ExecutionMethod.RUN, ExecutionLevel.AGENT_LEVEL)
+    
+    print("\n2. Testing RUN_SYNC method:")
+    result2 = await agent.execute_query(query, ExecutionMethod.RUN_SYNC, ExecutionLevel.RUN_LEVEL)
+    
+    print("\n3. Testing STREAMING method:")
+    async for chunk in agent.execute_query(query, ExecutionMethod.STREAMING, ExecutionLevel.GLOBAL_LEVEL):
+        pass  # Chunks are printed in the method
+
+if __name__ == "__main__":
+    print("🤖 Gemini Agent System")
+    print("Choose execution mode:")
+    print("1. Full Demo")
+    print("2. Simple Example")
+    
+    choice = input("Enter choice (1 or 2): ").strip()
+    
+    if choice == "1":
+        asyncio.run(run_demo())
+    else:
+        asyncio.run(simple_example())
